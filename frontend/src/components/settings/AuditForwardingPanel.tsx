@@ -13,8 +13,8 @@ import type {
   AuditForwarderInput,
   AuditForwarderProtocol,
 } from '../../api/types'
-import { relativeAge } from '../../lib/time'
 import {
+  Age,
   Button,
   Field,
   IconButton,
@@ -200,7 +200,7 @@ export function AuditForwardingPanel() {
                         forwarder.last_status === 'ok' ? 'text-muted' : 'text-danger'
                       }`}
                     >
-                      Last attempt {relativeAge(forwarder.last_attempt_at)} ·{' '}
+                      Last attempt <Age iso={forwarder.last_attempt_at} /> ·{' '}
                       {forwarder.last_status === 'ok'
                         ? 'delivered'
                         : forwarder.last_message || 'failed'}

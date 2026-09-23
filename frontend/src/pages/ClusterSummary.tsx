@@ -25,6 +25,7 @@ import { JitRequestModal } from '../components/jit/JitRequestModal'
 import { KubeconfigDrawer } from '../components/KubeconfigDrawer'
 import { PathHop, PathNode } from '../components/LinkStatus'
 import {
+  Age,
   Button,
   ClusterState,
   DetailList,
@@ -38,7 +39,7 @@ import { useLiveTick } from '../lib/live'
 import { DEFAULT_RESOURCE, resourceHref } from '../lib/navigation'
 import { queryKey, useCachedQuery } from '../lib/query'
 import { linkState } from '../lib/status'
-import { formatInstant, relativeAge } from '../lib/time'
+import { formatInstant } from '../lib/time'
 import { formatCPU, formatMemory } from '../lib/units'
 import { useAuth } from '../state/auth-context'
 
@@ -284,7 +285,7 @@ function AdminDashboard({
             className="ml-auto text-[12.5px] text-muted"
             title={formatInstant(cluster.last_checked_at, { seconds: true })}
           >
-            last probe {relativeAge(cluster.last_checked_at)}
+            last probe <Age iso={cluster.last_checked_at} />
           </span>
         </div>
 
@@ -500,7 +501,7 @@ function WorkloadDashboard({
             className="ml-auto text-[12.5px] text-muted"
             title={formatInstant(cluster.last_checked_at, { seconds: true })}
           >
-            last probe {relativeAge(cluster.last_checked_at)}
+            last probe <Age iso={cluster.last_checked_at} />
           </span>
         </div>
 

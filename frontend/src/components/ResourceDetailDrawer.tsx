@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { type ReactNode, Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Ban, CircleCheck, ExternalLink, RefreshCw, RotateCcw, SlidersHorizontal } from 'lucide-react'
 import { errorMessage, fetchResourceDescribe } from '../api/client'
 import { useLiveTick } from '../lib/live'
@@ -16,7 +16,6 @@ import type { ResourceKey } from '../lib/resources'
 import type { SelectedRow } from '../lib/selection'
 import { selectionKey } from '../lib/selection'
 import type { Tone } from '../lib/status'
-import { relativeAge } from '../lib/time'
 import { HelmHistoryPanel } from './HelmHistoryPanel'
 import { HelmValuesPanel } from './HelmValuesPanel'
 import { LogExplorer } from './LogExplorer'
@@ -37,6 +36,7 @@ import { WorkloadLogView } from './WorkloadLogView'
 import { WorkloadPodsView } from './WorkloadPodsView'
 import { YamlPanel } from './YamlPanel'
 import {
+  Age,
   Button,
   DetailList,
   EmptyState,
@@ -679,14 +679,14 @@ function OverviewTab({
    * identity list when there is a pod, rather than being printed twice a few
    * pixels apart.
    */
-  const identity = [
+  const identity: Array<{ term: string; value: ReactNode }> = [
     { term: 'Kind', value: describe.kind || '—' },
     { term: 'API version', value: describe.api_version || '—' },
   ]
   if (!pod) {
     identity.push(
       { term: 'Namespace', value: describe.namespace || 'cluster-scoped' },
-      { term: 'Age', value: describe.created_at ? relativeAge(describe.created_at) : '—' },
+      { term: 'Age', value: describe.created_at ? <Age iso={describe.created_at} /> : '—' },
     )
   }
 
@@ -760,7 +760,7 @@ function Conditions({ conditions }: { conditions: ResourceCondition[] }) {
                     {condition.message || '—'}
                   </Td>
                   <Td className="text-[12.5px] text-muted">
-                    {condition.last_transition_at ? relativeAge(condition.last_transition_at) : '—'}
+                    {condition.last_transition_at ? <Age iso={condition.last_transition_at} /> : '—'}
                   </Td>
                 </Row>
               )
@@ -898,7 +898,7 @@ function Events({ describe }: { describe: ResourceDescribeResult }) {
                   {event.count}
                 </Td>
                 <Td className="text-[12.5px] text-muted">
-                  {event.last_seen ? relativeAge(event.last_seen) : '—'}
+                  {event.last_seen ? <Age iso={event.last_seen} /> : '—'}
                 </Td>
               </Row>
             ))}
