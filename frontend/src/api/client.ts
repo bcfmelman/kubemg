@@ -1965,13 +1965,28 @@ export async function stopShell(clusterId: number): Promise<{ message: string }>
   return data
 }
 
-/** shellSocketURL is the terminal's WebSocket. It carries the session token in
-    the query string for the reason the pod terminal does: a browser cannot set
-    a header when it opens a WebSocket. */
-export function shellSocketURL(clusterId: number): string {
+/**
+ * mintWSTicket exchanges the session token already held for a short-lived,
+ * single-use ticket to open a WebSocket with.
+ *
+ * A browser cannot set a header when it opens a WebSocket, so the terminal and
+ * the browser shell have to put a credential on the query string instead. This
+ * call happens over an ordinary, header-authenticated request first, so the
+ * value that actually rides in the WebSocket's URL — and from there into any
+ * proxy's access log — is a ticket good for one redemption in the next few
+ * seconds, never the session token itself.
+ */
+export async function mintWSTicket(): Promise<string> {
+  const { data } = await http.post<{ ticket: string }>('/auth/ws-ticket')
+  return data.ticket
+}
+
+/** shellSocketURL is the terminal's WebSocket, carrying a one-time ticket in
+    the query string in place of the session token — see mintWSTicket. */
+export async function shellSocketURL(clusterId: number): Promise<string> {
   const origin = apiOrigin || window.location.origin
-  const token = readToken() ?? ''
-  const query = new URLSearchParams({ access_token: token })
+  const ticket = await mintWSTicket()
+  const query = new URLSearchParams({ access_token: ticket })
   return `${origin}/api/v1/clusters/${clusterId}/shell/attach?${query}`.replace(/^http/, 'ws')
 }
 

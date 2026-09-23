@@ -167,6 +167,30 @@ func TestMeRejectsTokenSignedWithOtherSecret(t *testing.T) {
 	}
 }
 
+func TestMintWSTicketReturnsARedeemableTicket(t *testing.T) {
+	env := newTestEnv(t)
+	user := env.store.addUser("devops", "s3cret", db.RoleUser)
+
+	rec := env.do(t, http.MethodPost, "/api/v1/auth/ws-ticket", env.tokenFor(t, user), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	body := decode[wsTicketResponse](t, rec)
+	if body.Ticket == "" {
+		t.Fatal("expected a non-empty ticket")
+	}
+}
+
+func TestMintWSTicketRequiresToken(t *testing.T) {
+	env := newTestEnv(t)
+
+	rec := env.do(t, http.MethodPost, "/api/v1/auth/ws-ticket", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
 func TestMeRejectsDeletedUser(t *testing.T) {
 	env := newTestEnv(t)
 	user := env.store.addUser("devops", "s3cret", db.RoleUser)

@@ -176,6 +176,32 @@ func (s *server) me(c *gin.Context) {
 	c.JSON(http.StatusOK, toUserResponse(user))
 }
 
+type wsTicketResponse struct {
+	Ticket string `json:"ticket"`
+}
+
+// mintWSTicket exchanges the caller's already-verified credential for a
+// short-lived, single-use ticket to open a WebSocket with.
+//
+// It is reached the ordinary way, with the caller's bearer token in the
+// Authorization header — the console already holds that token and can set a
+// header on a plain request, it just cannot on the WebSocket upgrade that
+// follows. See auth.Manager.IssueWSTicket for why the ticket exists at all.
+func (s *server) mintWSTicket(c *gin.Context) {
+	claims, ok := auth.ClaimsFrom(c)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+		return
+	}
+
+	ticket, err := s.jwt.IssueWSTicket(claims)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not issue websocket ticket"})
+		return
+	}
+	c.JSON(http.StatusOK, wsTicketResponse{Ticket: ticket})
+}
+
 // currentUser resolves the JWT subject against the database, writing the error
 // response itself when resolution fails.
 func (s *server) currentUser(c *gin.Context) (*db.User, bool) {

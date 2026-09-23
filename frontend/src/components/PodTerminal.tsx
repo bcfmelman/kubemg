@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { fetchRecordingPolicy, proxyURL, readToken } from '../api/client'
+import { fetchRecordingPolicy, mintWSTicket, proxyURL } from '../api/client'
 import type { RecordingPolicy } from '../api/types'
 import { Select } from './primitives'
 import { RecordingNotice } from './terminal/RecordingNotice'
@@ -149,31 +149,20 @@ export function PodTerminal({
       return decoder.decode(bytes, { stream: true })
     }
 
-    // The token cannot go in a header on a browser WebSocket, so it rides in
-    // the query string. The proxy accepts either.
-    const token = readToken() ?? ''
-    const query = new URLSearchParams({
-      container,
-      stdin: 'true',
-      stdout: 'true',
-      stderr: 'true',
-      tty: 'true',
-      access_token: token,
-      command: shell,
-    })
-
-    const url = proxyURL(
-      clusterId,
-      `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/${encodeURIComponent(pod)}/exec?${query}`,
-      'ws',
-    )
-
-    const socket = new WebSocket(url, SUBPROTOCOLS)
-    socket.binaryType = 'arraybuffer'
+    // A ticket cannot go in a header on a browser WebSocket, so it rides in
+    // the query string — minted just before the socket opens, redeemed once,
+    // and worthless a few seconds later. See mintWSTicket.
+    let socket: WebSocket | null = null
+    let typed: { dispose: () => void } | null = null
+    // Minting the ticket is itself a request, so opening the connection is
+    // asynchronous now; `cancelled` covers the window between starting that
+    // request and the effect being torn down (a fast unmount, or one of the
+    // deps changing again before it resolves).
+    let cancelled = false
 
     /** send frames a payload on a channel, as the protocol requires. */
     function send(channel: number, payload: Uint8Array) {
-      if (socket.readyState !== WebSocket.OPEN) return
+      if (!socket || socket.readyState !== WebSocket.OPEN) return
       const frame = new Uint8Array(payload.length + 1)
       frame[0] = channel
       frame.set(payload, 1)
@@ -187,78 +176,107 @@ export function PodTerminal({
       )
     }
 
-    socket.onopen = () => {
-      setStatus('open')
-      setDetail(null)
-      sendResize()
-      term.focus()
-    }
-
-    socket.onmessage = (event) => {
-      const frame = new Uint8Array(event.data as ArrayBuffer)
-      if (frame.length === 0) return
-
-      const channel = frame[0]
-      const body = frame.subarray(1)
-      switch (channel) {
-        case CHANNEL_STDOUT:
-        case CHANNEL_STDERR:
-          term.write(decodeChannel(channel, body))
-          break
-        case CHANNEL_ERROR: {
-          // The API server reports a failed exec on this channel as a JSON
-          // Status object; show its message rather than raw JSON. It arrives
-          // whole, so it is decoded on its own rather than through a streaming
-          // decoder that would hold a trailing byte back waiting for more.
-          const payload = new TextDecoder().decode(body)
-          try {
-            const parsed = JSON.parse(payload) as { status?: string; message?: string }
-            if (parsed.status !== 'Success' && parsed.message) {
-              term.write(`\r\n\x1b[31m${parsed.message}\x1b[0m\r\n`)
-              // A slim image often has no bash at all, and "executable file not
-              // found" is the moment to say which control fixes it.
-              if (parsed.message.includes('executable file not found')) {
-                term.write(
-                  `\x1b[90mThis image has no ${shell}. Try another shell from the picker above.\x1b[0m\r\n`,
-                )
-              }
-            }
-          } catch {
-            if (payload.trim()) term.write(`\r\n${payload}\r\n`)
-          }
-          break
-        }
-        default:
-          break
-      }
-    }
-
-    socket.onerror = () => {
-      setStatus('error')
-      setDetail('The session could not be established.')
-    }
-
-    socket.onclose = (event) => {
-      setStatus((current) => (current === 'error' ? current : 'closed'))
-      if (event.reason) setDetail(event.reason)
-      term.write('\r\n\x1b[90m— session ended —\x1b[0m\r\n')
-    }
-
-    const typed = term.onData((data) => send(CHANNEL_STDIN, encoder.encode(data)))
-
     const observer = new ResizeObserver(() => {
       fit.fit()
       sendResize()
     })
     observer.observe(element)
 
+    mintWSTicket()
+      .then((ticket) => {
+        if (cancelled) return
+
+        const query = new URLSearchParams({
+          container,
+          stdin: 'true',
+          stdout: 'true',
+          stderr: 'true',
+          tty: 'true',
+          access_token: ticket,
+          command: shell,
+        })
+        const url = proxyURL(
+          clusterId,
+          `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/${encodeURIComponent(pod)}/exec?${query}`,
+          'ws',
+        )
+
+        socket = new WebSocket(url, SUBPROTOCOLS)
+        socket.binaryType = 'arraybuffer'
+
+        socket.onopen = () => {
+          setStatus('open')
+          setDetail(null)
+          sendResize()
+          term.focus()
+        }
+
+        socket.onmessage = (event) => {
+          const frame = new Uint8Array(event.data as ArrayBuffer)
+          if (frame.length === 0) return
+
+          const channel = frame[0]
+          const body = frame.subarray(1)
+          switch (channel) {
+            case CHANNEL_STDOUT:
+            case CHANNEL_STDERR:
+              term.write(decodeChannel(channel, body))
+              break
+            case CHANNEL_ERROR: {
+              // The API server reports a failed exec on this channel as a JSON
+              // Status object; show its message rather than raw JSON. It arrives
+              // whole, so it is decoded on its own rather than through a streaming
+              // decoder that would hold a trailing byte back waiting for more.
+              const payload = new TextDecoder().decode(body)
+              try {
+                const parsed = JSON.parse(payload) as { status?: string; message?: string }
+                if (parsed.status !== 'Success' && parsed.message) {
+                  term.write(`\r\n\x1b[31m${parsed.message}\x1b[0m\r\n`)
+                  // A slim image often has no bash at all, and "executable file not
+                  // found" is the moment to say which control fixes it.
+                  if (parsed.message.includes('executable file not found')) {
+                    term.write(
+                      `\x1b[90mThis image has no ${shell}. Try another shell from the picker above.\x1b[0m\r\n`,
+                    )
+                  }
+                }
+              } catch {
+                if (payload.trim()) term.write(`\r\n${payload}\r\n`)
+              }
+              break
+            }
+            default:
+              break
+          }
+        }
+
+        socket.onerror = () => {
+          setStatus('error')
+          setDetail('The session could not be established.')
+        }
+
+        socket.onclose = (event) => {
+          setStatus((current) => (current === 'error' ? current : 'closed'))
+          if (event.reason) setDetail(event.reason)
+          term.write('\r\n\x1b[90m— session ended —\x1b[0m\r\n')
+        }
+
+        typed = term.onData((data) => send(CHANNEL_STDIN, encoder.encode(data)))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setStatus('error')
+        setDetail('The session could not be established.')
+      })
+
     return () => {
+      cancelled = true
       observer.disconnect()
       deckWatcher.disconnect()
-      typed.dispose()
+      typed?.dispose()
       // 1000 is a normal close; anything else makes the audit trail read as if
       // the session crashed.
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
         socket.close(1000, 'closed by the operator')
       }
       term.dispose()

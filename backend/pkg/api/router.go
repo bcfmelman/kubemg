@@ -629,6 +629,9 @@ func NewRouter(opts Options) *gin.Engine {
 	{
 		v1.POST("/auth/login", s.login)
 		v1.GET("/auth/me", requireAuth, s.me)
+		// The console calls this over a header-authenticated request, then opens
+		// the WebSocket the ticket is for — see auth.Manager.IssueWSTicket.
+		v1.POST("/auth/ws-ticket", requireAuth, s.mintWSTicket)
 		// Rotating your own password is not an administrative act, so it does not
 		// live under /users/:id — that route is an administrator editing somebody
 		// else's account. The handler requires the current password, which is why

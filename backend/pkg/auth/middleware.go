@@ -11,9 +11,12 @@ import (
 // contextKey is the Gin context key holding the verified claims.
 const contextKey = "kubemg_claims"
 
-// QueryTokenParam carries the session token on a WebSocket upgrade. A browser
-// cannot set headers when opening a WebSocket, so this is the only way an
-// in-page terminal can authenticate.
+// QueryTokenParam carries a short-lived, single-use ticket (see
+// Manager.IssueWSTicket) on a WebSocket upgrade. A browser cannot set headers
+// when opening a WebSocket, so this is the only way an in-page terminal can
+// authenticate — but the session JWT itself never goes on the wire this way,
+// since a query string routinely ends up in proxy access logs and browser
+// history.
 const QueryTokenParam = "access_token"
 
 // RequireAuth validates the Bearer token and stores its claims on the request
@@ -31,38 +34,46 @@ func RequireAuth(m *Manager, service ...MachineTokenVerifier) gin.HandlerFunc {
 		verifier = service[0]
 	}
 	return func(c *gin.Context) {
-		token, ok := bearerToken(c.GetHeader("Authorization"))
-		if !ok {
-			// Fall back to the query parameter, but only for an upgrade: on an
-			// ordinary request a token in the URL would end up in proxy logs
-			// and browser history for no reason, since a header works there.
-			if isWebSocketUpgrade(c.Request) {
-				token = strings.TrimSpace(c.Query(QueryTokenParam))
-				ok = token != ""
-			}
-		}
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
-			return
-		}
-
 		var (
 			claims *Claims
 			err    error
 		)
-		if IsMachineToken(token) {
-			// A build without programmatic access wired refuses these rather
-			// than falling through to the JWT parser, which would answer the
-			// same 401 by a route that says nothing about why.
-			if verifier == nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "programmatic access is not enabled on this server",
-				})
+
+		if token, ok := bearerToken(c.GetHeader("Authorization")); ok {
+			if IsMachineToken(token) {
+				// A build without programmatic access wired refuses these rather
+				// than falling through to the JWT parser, which would answer the
+				// same 401 by a route that says nothing about why.
+				if verifier == nil {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+						"error": "programmatic access is not enabled on this server",
+					})
+					return
+				}
+				claims, err = verifier.VerifyMachineToken(c.Request.Context(), token)
+			} else {
+				claims, err = m.Parse(token)
+			}
+		} else if isWebSocketUpgrade(c.Request) {
+			// A browser cannot set a header when opening a WebSocket, so the
+			// upgrade carries a ticket on the query string instead — see
+			// QueryTokenParam. The ticket is redeemed once and discarded; it is
+			// never the session JWT itself, which a query string would otherwise
+			// leave sitting in proxy access logs and browser history.
+			ticket := strings.TrimSpace(c.Query(QueryTokenParam))
+			if ticket == "" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 				return
 			}
-			claims, err = verifier.VerifyMachineToken(c.Request.Context(), token)
+			var redeemed bool
+			claims, redeemed = m.redeemWSTicket(ticket)
+			if !redeemed {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired ticket"})
+				return
+			}
 		} else {
-			claims, err = m.Parse(token)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+			return
 		}
 		if err != nil || claims == nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})

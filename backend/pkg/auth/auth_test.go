@@ -225,3 +225,132 @@ func TestRequireRoleWithoutAuthMiddleware(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
 }
+
+// wsUpgradeRequest builds a request that RequireAuth recognises as a
+// WebSocket handshake, with the ticket (if any) on the query string the way a
+// browser's WebSocket constructor has to send it.
+func wsUpgradeRequest(query string) *http.Request {
+	target := "/protected"
+	if query != "" {
+		target += "?" + query
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	return req
+}
+
+func TestIssueAndRedeemWSTicket(t *testing.T) {
+	m := NewManager("secret", time.Hour)
+	claims := &Claims{UserID: 9, Username: "operator", Role: "admin"}
+
+	ticket, err := m.IssueWSTicket(claims)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if ticket == "" {
+		t.Fatal("expected a non-empty ticket")
+	}
+
+	redeemed, ok := m.redeemWSTicket(ticket)
+	if !ok {
+		t.Fatal("expected the ticket to redeem")
+	}
+	if redeemed.UserID != claims.UserID || redeemed.Username != claims.Username || redeemed.Role != claims.Role {
+		t.Fatalf("unexpected claims: %+v", redeemed)
+	}
+}
+
+func TestRedeemWSTicketIsSingleUse(t *testing.T) {
+	m := NewManager("secret", time.Hour)
+	ticket, err := m.IssueWSTicket(&Claims{UserID: 1, Username: "devops"})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+
+	if _, ok := m.redeemWSTicket(ticket); !ok {
+		t.Fatal("expected the first redemption to succeed")
+	}
+	if _, ok := m.redeemWSTicket(ticket); ok {
+		t.Fatal("expected a replayed ticket to be refused")
+	}
+}
+
+func TestRedeemWSTicketRejectsUnknownValue(t *testing.T) {
+	m := NewManager("secret", time.Hour)
+	if _, ok := m.redeemWSTicket("not-a-real-ticket"); ok {
+		t.Fatal("expected an unminted ticket to be refused")
+	}
+}
+
+// TestRequireAuthWebSocketUpgrade covers the query-string fallback that only
+// a WebSocket handshake may use: a browser cannot set a header when opening
+// one, so it authenticates with a ticket instead. See QueryTokenParam.
+func TestRequireAuthWebSocketUpgrade(t *testing.T) {
+	m := NewManager("secret", time.Hour)
+	sessionToken, _, err := m.Generate(3, "devops", "user")
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	ticket, err := m.IssueWSTicket(&Claims{UserID: 3, Username: "devops", Role: "user"})
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+
+	router := gin.New()
+	router.GET("/protected", RequireAuth(m), func(c *gin.Context) {
+		claims, ok := ClaimsFrom(c)
+		if !ok {
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		c.String(http.StatusOK, claims.Username)
+	})
+
+	t.Run("valid ticket succeeds", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, wsUpgradeRequest(QueryTokenParam+"="+ticket))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a redeemed ticket cannot be replayed", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, wsUpgradeRequest(QueryTokenParam+"="+ticket))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+		}
+	})
+
+	t.Run("a raw session JWT on the query string is refused", func(t *testing.T) {
+		// The whole point of the ticket is that the session token itself never
+		// rides on a URL. Presenting it directly must not work as a shortcut.
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, wsUpgradeRequest(QueryTokenParam+"="+sessionToken))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+		}
+	})
+
+	t.Run("query fallback is refused on a non-upgrade request", func(t *testing.T) {
+		ticket, err := m.IssueWSTicket(&Claims{UserID: 3, Username: "devops", Role: "user"})
+		if err != nil {
+			t.Fatalf("issue ticket: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/protected?"+QueryTokenParam+"="+ticket, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+		}
+	})
+
+	t.Run("missing ticket on an upgrade is refused", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, wsUpgradeRequest(""))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+		}
+	})
+}
