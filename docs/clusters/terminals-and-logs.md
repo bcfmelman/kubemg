@@ -90,6 +90,37 @@ A terminal that is not *inside* one particular pod — `kubectl` in a pod kubemg
 runs for you — is [the browser shell](browser-shell.md). It rides this same
 bridge and is recorded on the same terms.
 
+## Debugging a pod with no shell
+
+`exec` needs a shell inside the target container, and a distroless or
+scratch image has none — which is exactly the kind of image worth running in
+production, and therefore exactly the pod an operator most needs to get
+into. The **Debug** action beside the terminal is `kubectl debug`'s trick:
+`POST .../resources/pods/debug` writes a second, throwaway container onto
+the running pod (the pod's own `ephemeralcontainers` subresource), sharing
+the process namespace of whichever existing container is chosen, and the
+console then execs into *that* container through the same
+`serveUpgradeStream` bridge above — no new streaming path, no new
+permission.
+
+Two things about it do not follow the rules everything else on this page
+does, and the sheet says both before the button is reachable:
+
+- **It cannot be undone.** The Kubernetes API has no delete for an ephemeral
+  container — once it is added, it stays on the pod for the pod's life.
+- **It shares namespaces.** The debug container sees the target container's
+  process (and, from there, its network) namespace, which is the point and
+  also a privilege.
+
+The write is the same read-modify-write every workload action here uses: the
+pod is read first, so a concurrent change surfaces as the cluster's own
+`409` rather than a blind overwrite, and a namespace outside the caller's
+grant is refused before the cluster is ever asked. The image the container
+runs is an operator setting (`debug_image` on the Settings page,
+`KUBEMG_DEBUG_IMAGE` at boot) rather than a build constant — an air-gapped
+site has no path to a public registry and points this at its own mirror the
+same way it does the browser shell's image.
+
 ## Port-forward through the proxy
 
 `port-forward` rides the same `serveUpgradeStream` bridge as `exec`/`attach`.

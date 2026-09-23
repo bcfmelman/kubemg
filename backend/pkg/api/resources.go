@@ -505,7 +505,7 @@ func (s *server) scopedNamespace(c *gin.Context, grant db.UserClusterAccess, nam
 		return "", false
 	}
 	if len(allowed) > 0 && !slices.Contains(allowed, requested) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "namespace is outside your granted scope"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "namespace " + requested + " is outside your granted scope"})
 		return "", false
 	}
 	return requested, true

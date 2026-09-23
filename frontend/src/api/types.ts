@@ -2226,6 +2226,21 @@ export interface NodeSchedulableResult {
 }
 
 /**
+ * What the Debug action did: an ephemeral container written onto a pod
+ * that had none of its own to exec into. `container` is the ephemeral
+ * container's own generated name — what a terminal addresses next — never
+ * `target_container`, the existing one whose process namespace it shares.
+ */
+export interface DebugContainerResult {
+  pod: string
+  namespace: string
+  container: string
+  target_container: string
+  image: string
+  message: string
+}
+
+/**
  * What a delete did — or rather asked for. A delete is a request for removal,
  * not the removal itself: a pod with a termination grace period, or anything
  * carrying a finalizer, is still in the list when this comes back, which is why
