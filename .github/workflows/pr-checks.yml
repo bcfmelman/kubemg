@@ -1,12 +1,13 @@
 name: PR checks
 
 # Runs on every pull request into master (and again on push to master as a
-# post-merge safety net) so a fast-moving PR flow still gets four things
-# checked automatically: the PR is actually mergeable, no credential slipped
-# into the diff, nothing newly added carries a known-vulnerable dependency or
-# a risky container/K8s misconfiguration, and nothing this code actually calls
-# has a known vulnerability — including in the Go standard library, which is
-# the part a dependency scanner cannot see.
+# post-merge safety net) so a fast-moving PR flow still gets five things
+# checked automatically: the code actually compiles, vets and passes its own
+# tests (`make verify`, below); the PR is actually mergeable; no credential
+# slipped into the diff; nothing newly added carries a known-vulnerable
+# dependency or a risky container/K8s misconfiguration; and nothing this code
+# actually calls has a known vulnerability — including in the Go standard
+# library, which is the part a dependency scanner cannot see.
 on:
   pull_request:
     branches: [master]
@@ -65,6 +66,43 @@ jobs:
             } else {
               core.info('No merge conflicts detected against the base branch.')
             }
+
+  # `make verify`, run as GitHub checks rather than trusted to a reviewer's own
+  # machine. Every leg is one of `docker-compose.ci.yml`'s own services,
+  # invoked exactly the way a contributor's shell does — this workflow names
+  # which one to run and nothing about how; the command line for each lives in
+  # exactly one place. Before this job existed, a PR that failed to compile or
+  # broke a test still showed every check green — see #148 and #137, both
+  # caught only because a reviewer happened to run `make verify` locally.
+  #
+  # `fail-fast: false` because a broken build and a failing test are two
+  # different things to fix, and stopping at the first is how the second one
+  # ships anyway on the next PR.
+  verify:
+    name: make verify (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - manifest-check
+          - backend-vet
+          - backend-test
+          - backend-build
+          - agent-vet
+          - agent-test
+          - agent-build
+          - frontend-lint
+          - frontend-test
+          - frontend-contrast
+          - frontend-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose run --rm ${{ matrix.service }}
+        run: docker compose -f docker-compose.ci.yml run --rm ${{ matrix.service }}
 
   # Catches a committed credential (API key, private key, cluster token,
   # database password, ...) before it reaches master. Runs against full
