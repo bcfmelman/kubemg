@@ -190,6 +190,10 @@ export function ResourceDetailDrawer({
   // and only once it exists does the container picker and the terminal below
   // address it — see DebugContainerSheet.
   const [debugging, setDebugging] = useState(false)
+  // Which container, if any, is a debug one this drawer just started — its
+  // default image has no bash, so the terminal opens with sh instead. Cleared
+  // whenever the operator picks a different container by hand.
+  const [debugContainer, setDebugContainer] = useState<string | null>(null)
   // A container the pod's own list has not caught up to yet — the debug
   // container this drawer just added — is still worth addressing, so it is
   // appended rather than left off the picker entirely.
@@ -467,7 +471,10 @@ export function ResourceDetailDrawer({
               aria-label="Container"
               size="sm"
               value={container}
-              onChange={(event) => setContainer(event.target.value)}
+              onChange={(event) => {
+                setContainer(event.target.value)
+                setDebugContainer(null)
+              }}
             >
               {containerOptions.map((name) => (
                 <option key={name} value={name}>
@@ -609,11 +616,17 @@ export function ResourceDetailDrawer({
           ) : null}
           {shell === 'terminal' ? (
             <Suspense fallback={<p className="text-[13px] text-muted">Loading the terminal…</p>}>
+              {/* Keyed on the container so switching to (or away from) a debug
+                  one is a fresh terminal instance, not a socket reopened on top
+                  of state — including the shell picker's own default, which a
+                  busybox debug image needs to be sh rather than bash. */}
               <PodTerminal
+                key={container}
                 clusterId={cluster.id}
                 namespace={pod.namespace}
                 pod={pod.name}
                 container={container}
+                defaultShell={container === debugContainer ? '/bin/sh' : undefined}
               />
             </Suspense>
           ) : null}
@@ -630,6 +643,7 @@ export function ResourceDetailDrawer({
             // never the one the session was asked against — that is the
             // whole point of an ephemeral container by name.
             setContainer(result.container)
+            setDebugContainer(result.container)
             setDebugging(false)
           }}
         />

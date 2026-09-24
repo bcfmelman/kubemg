@@ -103,6 +103,16 @@ console then execs into *that* container through the same
 `serveUpgradeStream` bridge above — no new streaming path, no new
 permission.
 
+The write landing is not the same moment as the container being attachable:
+the image still has to be pulled and the container still has to start, and an
+exec attempted before either finishes fails with an opaque "waiting to
+start". So the console polls the pod's own status after the write and opens
+the terminal only once the debug container reports running, showing the wait
+as plain text rather than a spinner — and, if it never starts, the reason the
+cluster gave (an image still pulling, or one that never will) rather than a
+terminal that just fails. The debug session opens with `sh`, since a minimal
+debug image commonly has no `bash`; the shell picker can still switch it.
+
 Two things about it do not follow the rules everything else on this page
 does, and the sheet says both before the button is reachable:
 

@@ -769,6 +769,18 @@ export function fetchPods(clusterId: number, namespace: string): Promise<Pod[]> 
   return fetchList<Pod>(clusterId, 'pods', 'pods', namespace)
 }
 
+/**
+ * fetchPod reads one pod fresh, the same normalised shape fetchPods returns
+ * for a list. Used to poll a debug container's status after adding one — see
+ * DebugContainerSheet — rather than to browse a namespace.
+ */
+export async function fetchPod(clusterId: number, namespace: string, name: string): Promise<Pod> {
+  const { data } = await http.get<Pod>(`${resourceURL(clusterId, 'pods')}/${encodeURIComponent(name)}`, {
+    params: { namespace },
+  })
+  return data
+}
+
 /*
  * The inventory reads. Each one is a normalised list from the backend, read live
  * through the agent tunnel under the caller's own identity — a scoped grant gets

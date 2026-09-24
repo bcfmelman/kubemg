@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -72,6 +73,62 @@ func TestHasContainerNamedRefusesAMalformedSpec(t *testing.T) {
 		if hasContainerNamed(spec, "app") {
 			t.Fatalf("%s: expected no match against a spec that names nothing", name)
 		}
+	}
+}
+
+// A caller polling for a debug container to start needs to tell "running",
+// "still pulling the image" and "will never start" apart without attempting
+// an exec first — see DebugContainerSheet on the frontend.
+func TestPodViewReportsEphemeralContainerStatus(t *testing.T) {
+	raw := []byte(`{
+		"metadata": {"name": "checkout-7f9", "namespace": "shop"},
+		"spec": {"containers": [{"name": "app", "image": "app:1.0"}]},
+		"status": {
+			"phase": "Running",
+			"containerStatuses": [
+				{"name": "app", "image": "app:1.0", "ready": true, "state": {"running": {}}}
+			],
+			"ephemeralContainerStatuses": [
+				{"name": "debug-aaaaaaaa", "state": {"running": {}}},
+				{"name": "debug-bbbbbbbb", "state": {
+					"waiting": {"reason": "ErrImagePull", "message": "rpc error: manifest unknown"}
+				}}
+			]
+		}
+	}`)
+
+	var pod podObject
+	if err := json.Unmarshal(raw, &pod); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	containers := pod.view().EphemeralContainers
+	if len(containers) != 2 {
+		t.Fatalf("ephemeral containers = %d, want 2", len(containers))
+	}
+
+	running := containers[0]
+	if running.Name != "debug-aaaaaaaa" || !running.Running || running.Reason != "" {
+		t.Fatalf("running container = %+v", running)
+	}
+
+	waiting := containers[1]
+	if waiting.Name != "debug-bbbbbbbb" || waiting.Running ||
+		waiting.Reason != "ErrImagePull" || waiting.Message != "rpc error: manifest unknown" {
+		t.Fatalf("waiting container = %+v", waiting)
+	}
+}
+
+// A pod that never had a debug container added reports an empty slice, not a
+// missing field — the frontend polls this shape whether or not one exists.
+func TestPodViewReportsNoEphemeralContainersAsAnEmptySlice(t *testing.T) {
+	raw := []byte(`{"metadata": {"name": "checkout-7f9"}, "spec": {}, "status": {}}`)
+
+	var pod podObject
+	if err := json.Unmarshal(raw, &pod); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := pod.view().EphemeralContainers; got == nil || len(got) != 0 {
+		t.Fatalf("ephemeral containers = %#v, want an empty, non-nil slice", got)
 	}
 }
 
