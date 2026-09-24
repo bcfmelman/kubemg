@@ -27,6 +27,32 @@ func TestGetServesAStoredValueAndExpiresIt(t *testing.T) {
 	}
 }
 
+func TestTakeConsumesAnEntryOnce(t *testing.T) {
+	store := New[string](time.Minute)
+	store.Put("", "ticket", "answer")
+
+	if got, ok := store.Take("ticket"); !ok || got != "answer" {
+		t.Fatalf("Take = %q, %v; want the stored value", got, ok)
+	}
+	if _, ok := store.Take("ticket"); ok {
+		t.Fatal("expected a second Take of the same key to miss")
+	}
+	if store.Len() != 0 {
+		t.Fatalf("Len = %d after Take; want 0", store.Len())
+	}
+}
+
+func TestTakeMissesAnExpiredEntry(t *testing.T) {
+	store := New[string](20 * time.Millisecond)
+	store.Put("", "ticket", "answer")
+
+	time.Sleep(40 * time.Millisecond)
+
+	if _, ok := store.Take("ticket"); ok {
+		t.Fatal("expected an expired entry to miss rather than be handed out")
+	}
+}
+
 func TestPutRefusesNoTTL(t *testing.T) {
 	// A cache built with a nonsensical TTL takes the documented default rather
 	// than becoming one that never hits.

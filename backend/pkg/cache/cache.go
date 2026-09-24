@@ -100,6 +100,24 @@ func (c *Cache[V]) Get(key string) (V, bool) {
 	return found.value, true
 }
 
+// Take returns and removes a live entry in one step, for a value that must
+// answer at most once — a nonce, a ticket, anything whose whole point is that
+// a second read must miss. A merely expired entry is dropped the same way Get
+// drops one, without counting as a hit.
+func (c *Cache[V]) Take(key string) (V, bool) {
+	var zero V
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	found, ok := c.entries[key]
+	delete(c.entries, key)
+	if !ok || !time.Now().Before(found.expires) {
+		return zero, false
+	}
+	return found.value, true
+}
+
 // Put files a value under a key and a scope. The scope is what a write
 // invalidates; an empty one is legal and simply belongs to no group.
 func (c *Cache[V]) Put(scope, key string, value V) {

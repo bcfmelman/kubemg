@@ -132,11 +132,16 @@ export function ShellTerminal({
       return decoder.decode(bytes, { stream: true })
     }
 
-    const socket = new WebSocket(shellSocketURL(clusterId), SUBPROTOCOLS)
-    socket.binaryType = 'arraybuffer'
+    // Minting the ticket the socket authenticates with is itself a request,
+    // so opening the connection is asynchronous now; `cancelled` covers the
+    // window between starting that request and the effect being torn down
+    // (a fast unmount, or clusterId changing again before it resolves).
+    let socket: WebSocket | null = null
+    let typed: { dispose: () => void } | null = null
+    let cancelled = false
 
     function send(channel: number, payload: Uint8Array) {
-      if (socket.readyState !== WebSocket.OPEN) return
+      if (!socket || socket.readyState !== WebSocket.OPEN) return
       const frame = new Uint8Array(payload.length + 1)
       frame[0] = channel
       frame.set(payload, 1)
@@ -147,68 +152,82 @@ export function ShellTerminal({
       send(CHANNEL_RESIZE, encoder.encode(JSON.stringify({ Width: term.cols, Height: term.rows })))
     }
 
-    socket.onopen = () => {
-      setStatus('open')
-      setDetail(null)
-      sendResize()
-      term.focus()
-    }
-
-    socket.onmessage = (event) => {
-      const frame = new Uint8Array(event.data as ArrayBuffer)
-      if (frame.length === 0) return
-
-      const channel = frame[0]
-      const body = frame.subarray(1)
-      switch (channel) {
-        case CHANNEL_STDOUT:
-        case CHANNEL_STDERR:
-          term.write(decodeChannel(channel, body))
-          break
-        case CHANNEL_ERROR: {
-          const payload = new TextDecoder().decode(body)
-          try {
-            const parsed = JSON.parse(payload) as { status?: string; message?: string }
-            if (parsed.status !== 'Success' && parsed.message) {
-              term.write(`\r\n\x1b[31m${parsed.message}\x1b[0m\r\n`)
-            }
-          } catch {
-            if (payload.trim()) term.write(`\r\n${payload}\r\n`)
-          }
-          break
-        }
-        default:
-          break
-      }
-    }
-
-    socket.onerror = () => {
-      setStatus('error')
-      setDetail('The session could not be established.')
-    }
-
-    socket.onclose = (event) => {
-      setStatus((current) => (current === 'error' ? current : 'closed'))
-      if (event.reason) setDetail(event.reason)
-      term.write('\r\n\x1b[90m— session ended —\x1b[0m\r\n')
-      ended.current?.()
-    }
-
-    const typed = term.onData((data) => send(CHANNEL_STDIN, encoder.encode(data)))
-
     const observer = new ResizeObserver(() => {
       fit.fit()
       sendResize()
     })
     observer.observe(element)
 
+    shellSocketURL(clusterId)
+      .then((url) => {
+        if (cancelled) return
+
+        socket = new WebSocket(url, SUBPROTOCOLS)
+        socket.binaryType = 'arraybuffer'
+
+        socket.onopen = () => {
+          setStatus('open')
+          setDetail(null)
+          sendResize()
+          term.focus()
+        }
+
+        socket.onmessage = (event) => {
+          const frame = new Uint8Array(event.data as ArrayBuffer)
+          if (frame.length === 0) return
+
+          const channel = frame[0]
+          const body = frame.subarray(1)
+          switch (channel) {
+            case CHANNEL_STDOUT:
+            case CHANNEL_STDERR:
+              term.write(decodeChannel(channel, body))
+              break
+            case CHANNEL_ERROR: {
+              const payload = new TextDecoder().decode(body)
+              try {
+                const parsed = JSON.parse(payload) as { status?: string; message?: string }
+                if (parsed.status !== 'Success' && parsed.message) {
+                  term.write(`\r\n\x1b[31m${parsed.message}\x1b[0m\r\n`)
+                }
+              } catch {
+                if (payload.trim()) term.write(`\r\n${payload}\r\n`)
+              }
+              break
+            }
+            default:
+              break
+          }
+        }
+
+        socket.onerror = () => {
+          setStatus('error')
+          setDetail('The session could not be established.')
+        }
+
+        socket.onclose = (event) => {
+          setStatus((current) => (current === 'error' ? current : 'closed'))
+          if (event.reason) setDetail(event.reason)
+          term.write('\r\n\x1b[90m— session ended —\x1b[0m\r\n')
+          ended.current?.()
+        }
+
+        typed = term.onData((data) => send(CHANNEL_STDIN, encoder.encode(data)))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setStatus('error')
+        setDetail('The session could not be established.')
+      })
+
     return () => {
+      cancelled = true
       observer.disconnect()
       deckWatcher.disconnect()
-      typed.dispose()
+      typed?.dispose()
       // 1000 is a normal close; anything else makes the audit trail read as if
       // the session crashed.
-      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
         socket.close(1000, 'closed by the operator')
       }
       term.dispose()
