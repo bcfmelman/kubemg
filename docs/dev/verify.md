@@ -19,6 +19,16 @@ docker compose -f docker-compose.ci.yml run --rm backend-test
 docker compose -f docker-compose.ci.yml run --rm frontend-build
 ```
 
+**This is not a local-only convenience.** `.github/workflows/pr-checks.yml`
+runs every one of those eleven services as its own check, `make verify (<service>)`,
+on every pull request into `master` and again on push — the exact command a
+contributor runs locally, nothing duplicated into the workflow itself. A PR
+that fails to compile, fails `go vet`, breaks a test, or fails lint shows a red
+check with that service's name; a clean PR shows all eleven green. This runs
+alongside, and independently of, the security-focused jobs in the same
+workflow (gitleaks, the two Trivy scans, govulncheck, the documentation build)
+— those answer "is this safe to merge", this answers "does it work".
+
 ## The four gates that are not ordinary tests
 
 **`make manifest-check`** diffs `deploy/kustomize/base/` against the copy

@@ -90,6 +90,16 @@ services:
       - npm-cache:/root/.npm
     command: sh -c "npm ci && npm test"
 
+  # Reads the design tokens straight out of src/index.css, so it needs no
+  # installed dependencies — nothing here is an npm package, only Node's own
+  # built-ins.
+  frontend-contrast:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: node scripts/contrast.mjs
+
 volumes:
   go-mod-cache:
   go-build-cache:
